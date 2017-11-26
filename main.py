@@ -30,6 +30,7 @@ import numpy as np
 import os
 import tensorflow as tf
 import random
+import sys
 
 from history import History
 from replay_memory import ReplayMemory
@@ -95,8 +96,11 @@ copy_online_to_target = tf.group(*copy_ops)
 
 # Now for the training operations
 # learning_rate = 0.001
+# momentum = 0.950
 learning_rate = 0.00025
-momentum = 0.95
+learning_rate_minimum = 0.00025
+learning_rate_decay = 0.96
+learning_rate_decay_step = 50000
 
 def clipped_error(x):
     # Huber loss
@@ -123,9 +127,23 @@ with tf.variable_scope("train"):
     loss = tf.reduce_mean(clipped_error(delta))
 
     global_step = tf.Variable(0, trainable=False, name='global_step')
-    optimizer = tf.train.MomentumOptimizer(
-        learning_rate, momentum, use_nesterov=True)
-    training_op = optimizer.minimize(loss, global_step=global_step)
+    # optimizer = tf.train.MomentumOptimizer(
+    #     learning_rate, momentum, use_nesterov=True)
+    # training_op = optimizer.minimize(loss, global_step=global_step)
+    learning_rate_step = tf.placeholder('int64', None, name='learning_rate_step')
+    learning_rate_op = tf.maximum(
+        learning_rate_minimum,
+        tf.train.exponential_decay(
+            learning_rate,
+            learning_rate_step,
+            learning_rate_decay_step,
+            learning_rate_decay,
+            staircase=True
+        )
+    )
+    training_op = tf.train.RMSPropOptimizer(
+        learning_rate_op, momentum=0.95, epsilon=0.01
+    ).minimize(loss, global_step=global_step)
 
 init = tf.global_variables_initializer()
 saver = tf.train.Saver()
@@ -233,10 +251,12 @@ with tf.Session() as sess:
         if args.verbosity > 0:
             print("\rIter {}, training step {}/{} ({:.1f})%, "
                   "loss {:5f}, exp-moving-avg reward {:5f}, "
-                  "mean max-Q {:5f}   ".format(
-            iteration, step, args.number_steps, step * 100 / args.number_steps,
-            loss_val, exp_moving_avg_reward, 
-            mean_max_q), end="")
+                  "mean max-Q {:5f}".format(
+                    iteration, step, args.number_steps, step * 100 / args.number_steps,
+                    loss_val, exp_moving_avg_reward, 
+                    mean_max_q), 
+                end=""
+            )
         if done: # game over, start again
             obs = env.reset()
             # for skip in range(skip_start): # skip the start of each game
@@ -303,7 +323,11 @@ with tf.Session() as sess:
 
         # Train the online DQN
         _, loss_val = sess.run([training_op, loss], feed_dict={
-            X_state: X_state_val, X_action: X_action_val, y: y_val})
+            X_state: X_state_val,
+            X_action: X_action_val,
+            y: y_val,
+            learning_rate_step: step,
+        })
 
         # Regularly copy the online DQN to the target DQN
         if step % args.copy_steps == 0:
