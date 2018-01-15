@@ -176,15 +176,17 @@ replay_memory = ReplayMemory(
 # And on to the epsilon-greedy policy with decaying epsilon
 eps_min = 0.1
 eps_max = 1.0
-eps_decay_steps = args.number_steps // 2
 test_eps = eps_min if args.test else None
+eps_decay_steps = 1000000
+# eps_max = 1.0 if not args.test else eps_min
+# eps_decay_steps = args.number_steps // 2
 
 def epsilon_greedy(q_values, step):
     epsilon = test_eps or \
               (
                 eps_min + max(
                     0., 
-                    (eps_max - eps_min) * (replay_memory_size - max(0., step - training_start)) / replay_memory_size
+                    (eps_max - eps_min) * (eps_decay_steps - max(0., step - training_start)) / eps_decay_steps
                 )
               )
     # epsilon = max(eps_min, eps_max - (eps_max-eps_min) * step/eps_decay_steps)
