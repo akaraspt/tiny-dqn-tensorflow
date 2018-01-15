@@ -1,4 +1,4 @@
-"""Code from https://github.com/tambetm/simple_dqn/blob/master/src/replay_memory.py"""
+"""Code is modified from https://github.com/tambetm/simple_dqn/blob/master/src/replay_memory.py"""
 
 import os
 import random

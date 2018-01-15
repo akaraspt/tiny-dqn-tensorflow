@@ -36,30 +36,24 @@ from history import History
 from replay_memory import ReplayMemory
 from utils import rgb2gray, imresize
 
-# env = gym.make("MsPacman-v0")
 env = gym.make("Breakout-v0")
 done = True  # env needs to be reset
 
 # First let's build the two DQNs (online & target)
-# input_height = 88
-# input_width = 80
-# input_channels = 1
 input_height = 84
 input_width = 84
 input_channels = history_length = 4
 conv_n_maps = [32, 64, 64]
 conv_kernel_sizes = [(8,8), (4,4), (3,3)]
 conv_strides = [4, 2, 1]
-# conv_paddings = ["SAME"] * 3
 conv_paddings = ["VALID"] * 3
 conv_activation = [tf.nn.relu] * 3
-# n_hidden_in = 64 * 11 * 10  # conv3 has 64 maps of 11x10 each
 n_hidden = 512
 hidden_activation = tf.nn.relu
 n_outputs = env.action_space.n  # 9 discrete actions are available
-# initializer = tf.contrib.layers.variance_scaling_initializer()
 initializer = tf.truncated_normal_initializer(0, 0.02)
 
+# Deep-Q network
 def q_network(X_state, name):
     prev_layer = X_state
     with tf.variable_scope(name) as scope:
@@ -84,8 +78,11 @@ def q_network(X_state, name):
                               for var in trainable_vars}
     return outputs, trainable_vars_by_name
 
+# Place holder for input
 X_state = tf.placeholder(tf.float32, shape=[None, input_height, input_width,
                                             input_channels])
+
+# Create two Deep-Q networks
 online_q_values, online_vars = q_network(X_state, name="q_networks/online")
 target_q_values, target_vars = q_network(X_state, name="q_networks/target")
 
@@ -94,42 +91,31 @@ copy_ops = [target_var.assign(online_vars[var_name])
             for var_name, target_var in target_vars.items()]
 copy_online_to_target = tf.group(*copy_ops)
 
-# Now for the training operations
-# learning_rate = 0.001
-# momentum = 0.950
+# Parameters for optimizer
 learning_rate = 0.00025
 learning_rate_minimum = 0.00025
 learning_rate_decay = 0.96
 learning_rate_decay_step = 50000
+momentum = 0.95
 
+# Huber loss
 def clipped_error(x):
-    # Huber loss
     try:
         return tf.select(tf.abs(x) < 1.0, 0.5 * tf.square(x), tf.abs(x) - 0.5)
     except:
         return tf.where(tf.abs(x) < 1.0, 0.5 * tf.square(x), tf.abs(x) - 0.5)
 
+# Initialize optimizer for training
 with tf.variable_scope("train"):
-    X_action = tf.placeholder(tf.int32, shape=[None])
-    # y = tf.placeholder(tf.float32, shape=[None, 1])
-    y = tf.placeholder(tf.float32, shape=[None])
+    X_action = tf.placeholder(tf.int32, shape=[None])   # Estimated Q-value
+    y = tf.placeholder(tf.float32, shape=[None])        # Target Q-value
 
-    # q_value = tf.reduce_sum(online_q_values * tf.one_hot(X_action, n_outputs),
-    #                         axis=1, keep_dims=True)
-    # error = tf.abs(y - q_value)
-    # clipped_error = tf.clip_by_value(error, 0.0, 1.0)
-    # linear_error = 2 * (error - clipped_error)
-    # loss = tf.reduce_mean(tf.square(clipped_error) + linear_error)
-    
     q_value = tf.reduce_sum(online_q_values * tf.one_hot(X_action, n_outputs),
                             axis=1)
     delta = y - q_value
     loss = tf.reduce_mean(clipped_error(delta))
 
     global_step = tf.Variable(0, trainable=False, name='global_step')
-    # optimizer = tf.train.MomentumOptimizer(
-    #     learning_rate, momentum, use_nesterov=True)
-    # training_op = optimizer.minimize(loss, global_step=global_step)
     learning_rate_step = tf.placeholder('int64', None, name='learning_rate_step')
     learning_rate_op = tf.maximum(
         learning_rate_minimum,
@@ -142,50 +128,11 @@ with tf.variable_scope("train"):
         )
     )
     training_op = tf.train.RMSPropOptimizer(
-        learning_rate_op, momentum=0.95, epsilon=0.01
+        learning_rate_op, momentum=momentum, epsilon=0.01
     ).minimize(loss, global_step=global_step)
 
 init = tf.global_variables_initializer()
 saver = tf.train.Saver()
-
-# # Let's implement a simple replay memory
-# replay_memory_size = 20000
-# replay_memory = deque([], maxlen=replay_memory_size)
-
-# def sample_memories(batch_size):
-#     indices = np.random.permutation(len(replay_memory))[:batch_size]
-#     cols = [[], [], [], [], []] # state, action, reward, next_state, continue
-#     for idx in indices:
-#         memory = replay_memory[idx]
-#         for col, value in zip(cols, memory):
-#             col.append(value)
-#     cols = [np.array(col) for col in cols]
-#     return (cols[0], cols[1], cols[2].reshape(-1, 1), cols[3],
-#            cols[4].reshape(-1, 1))
-
-# And on to the epsilon-greedy policy with decaying epsilon
-eps_min = 0.1
-eps_max = 1.0 if not args.test else eps_min
-eps_decay_steps = args.number_steps // 2
-
-def epsilon_greedy(q_values, step):
-    epsilon = max(eps_min, eps_max - (eps_max-eps_min) * step/eps_decay_steps)
-    if np.random.rand() < epsilon:
-        return np.random.randint(n_outputs) # random action
-    else:
-        return np.argmax(q_values) # optimal action
-
-# # We need to preprocess the images to speed up training
-# mspacman_color = np.array([210, 164, 74]).mean()
-
-# def preprocess_observation(obs):
-#     img = obs[1:176:2, ::2] # crop and downsize
-#     img = img.mean(axis=2) # to greyscale
-#     img[img==mspacman_color] = 0 # Improve contrast
-#     img = (img - 128) / 128 - 1 # normalize from -1. to 1.
-#     return img.reshape(88, 80, 1)
-def preprocess_observation(obs):
-    return imresize(rgb2gray(obs)/255., (input_width, input_height))
 
 # TensorFlow - Execution phase
 training_start = 10000  # start training after 10,000 game iterations
@@ -205,6 +152,7 @@ game_length = 0
 total_max_q = 0
 mean_max_q = 0.0
 
+# Initialize history
 history = History(
     data_format='NHWC',
     batch_size=batch_size,
@@ -213,7 +161,8 @@ history = History(
     screen_width=input_width
 )
 
-replay_memory_size = 20000
+# Initialize Replay Memory
+replay_memory_size = 1000000
 replay_memory = ReplayMemory(
     data_format='NHWC',
     batch_size=batch_size,
@@ -224,30 +173,47 @@ replay_memory = ReplayMemory(
     model_dir='model'
 )
 
+# And on to the epsilon-greedy policy with decaying epsilon
+eps_min = 0.1
+eps_max = 1.0 if not args.test else eps_min
+eps_decay_steps = args.number_steps // 2
+
+def epsilon_greedy(q_values, step):
+    epsilon = test_ep or \
+              (
+                eps_min + max(
+                    0., 
+                    (eps_max - eps_min) * (replay_memory_size - max(0., step - training_start)) / replay_memory_size
+                )
+              )
+    # epsilon = max(eps_min, eps_max - (eps_max-eps_min) * step/eps_decay_steps)
+    if np.random.rand() < epsilon:
+        return np.random.randint(n_outputs) # random action
+    else:
+        return np.argmax(q_values) # optimal action
+
+def preprocess_observation(obs):
+    return imresize(rgb2gray(obs)/255., (input_width, input_height))
+
 with tf.Session() as sess:
-    # if os.path.isfile(args.path + ".index"):
-    #     saver.restore(sess, args.path)
+    # Resume the training (if possible)
     ckpt = tf.train.get_checkpoint_state(args.path)
     if ckpt and ckpt.model_checkpoint_path:
         ckpt_name = os.path.basename(ckpt.model_checkpoint_path)
         fname = os.path.join(args.path, ckpt_name)
         saver.restore(sess, fname)
         print(" [*] Load SUCCESS: %s" % fname)
-        
     else:
         init.run()
         copy_online_to_target.run()
         print(" [!] Load FAILED: %s" % args.path)
+
+    # Training
     while True:
         step = global_step.eval()
         if step >= args.number_steps:
             break
         iteration += 1
-        # if args.verbosity > 0:
-        #     print("\rIteration {}   Training step {}/{} ({:.1f})%   "
-        #           "Loss {:5f}    Mean Max-Q {:5f}   ".format(
-        #     iteration, step, args.number_steps, step * 100 / args.number_steps,
-        #     loss_val, mean_max_q), end="")
         if args.verbosity > 0:
             print("\rIter {}, training step {}/{} ({:.1f})%, "
                   "loss {:5f}, exp-moving-avg reward {:5f}, "
@@ -257,11 +223,15 @@ with tf.Session() as sess:
                     mean_max_q), 
                 end=""
             )
-        if done: # game over, start again
+
+         # Game over, start again
+        if done:
             obs = env.reset()
-            # for skip in range(skip_start): # skip the start of each game
+
+            # Randomly skip the start of each game
             for skip in xrange(random.randint(0, skip_start - 1)):
                 obs, _, done, _ = env.step(0)
+
             state = preprocess_observation(obs)
             for _ in range(history_length):
                 history.add(state)
@@ -270,7 +240,6 @@ with tf.Session() as sess:
             env.render()
 
         # Online DQN evaluates what to do
-        # q_values = online_q_values.eval(feed_dict={X_state: [state]})
         q_values = online_q_values.eval(feed_dict={X_state: [history.get()]})[0]
         action = epsilon_greedy(q_values, step)
 
@@ -285,7 +254,6 @@ with tf.Session() as sess:
         history.add(next_state)
 
         # Let's memorize what happened
-        # replay_memory.append((state, action, reward, next_state, 1.0 - done))
         replay_memory.add(next_state, reward, action, done)
         state = next_state
 
@@ -304,17 +272,15 @@ with tf.Session() as sess:
             continue # only train after warmup period and at regular intervals
         
         # Sample memories and use the target DQN to produce the target Q-Value
-        # X_state_val, X_action_val, rewards, X_next_state_val, continues = (
-        #     sample_memories(batch_size))
         X_state_val, X_action_val, rewards, X_next_state_val, terminal = \
              replay_memory.sample()
         next_q_values = target_q_values.eval(
-            feed_dict={X_state: X_next_state_val})
-        # max_next_q_values = np.max(next_q_values, axis=1, keepdims=True)
-        # y_val = rewards + continues * discount_rate * max_next_q_values
+            feed_dict={X_state: X_next_state_val}
+        )
         max_next_q_values = np.max(next_q_values, axis=1)
         y_val = rewards + (1. - terminal) * discount_rate * max_next_q_values
 
+        # Update exponential moving average of rewards
         if first_train_step:
             exp_moving_avg_reward = np.mean(rewards)
             first_train_step = False
