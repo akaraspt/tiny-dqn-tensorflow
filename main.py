@@ -178,6 +178,7 @@ eps_min = 0.1
 eps_max = 1.0
 test_eps = eps_min if args.test else None
 eps_decay_steps = 1000000
+# eps_min = 0.1
 # eps_max = 1.0 if not args.test else eps_min
 # eps_decay_steps = args.number_steps // 2
 
@@ -218,9 +219,9 @@ with tf.Session() as sess:
             break
         iteration += 1
         if args.verbosity > 0:
-            print("\rIter {}, training step {}/{} ({:.1f})%, "
+            print("Iter {}, training step {}/{} ({:.1f})%, "
                   "loss {:5f}, exp-moving-avg reward {:5f}, "
-                  "mean max-Q {:5f}".format(
+                  "mean max-Q {:5f}\r".format(
                     iteration, step, args.number_steps, step * 100 / args.number_steps,
                     loss_val, exp_moving_avg_reward, 
                     mean_max_q), 
@@ -300,10 +301,10 @@ with tf.Session() as sess:
 
         # Regularly copy the online DQN to the target DQN
         if step % args.copy_steps == 0:
-            print("Copying the weight from online DQN to target DQN ...")
+            # print("Copying the weight from online DQN to target DQN ...")
             copy_online_to_target.run()
 
         # And save regularly
         if step % args.save_steps == 0:
-            print("Saving model ...")
+            # print("Saving model ...")
             saver.save(sess, os.path.join(args.path, args.model_fname), global_step=step)
