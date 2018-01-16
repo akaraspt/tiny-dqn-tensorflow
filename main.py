@@ -107,8 +107,8 @@ def clipped_error(x):
 
 # Initialize optimizer for training
 with tf.variable_scope("train"):
-    X_action = tf.placeholder(tf.int32, shape=[None])   # Estimated Q-value
-    y = tf.placeholder(tf.float32, shape=[None])        # Target Q-value
+    X_action = tf.placeholder(tf.int32, shape=[None])   # Action based on Q-value from Online network
+    y = tf.placeholder(tf.float32, shape=[None])        # Q-value from Target network
 
     q_value = tf.reduce_sum(online_q_values * tf.one_hot(X_action, n_outputs),
                             axis=1)
@@ -130,6 +130,24 @@ with tf.variable_scope("train"):
     training_op = tf.train.RMSPropOptimizer(
         learning_rate_op, momentum=momentum, epsilon=0.01
     ).minimize(loss, global_step=global_step)
+
+# Summary for Tensorboard
+summary_steps = 100
+with tf.variable_scope('summary'):
+    summary_tags = ['average.reward']
+
+    summary_placeholders = {}
+    summary_ops = {}
+
+    for tag in summary_tags:
+        summary_placeholders[tag] = tf.placeholder('float32', None, name=tag.replace(' ', '_'))
+        summary_ops[tag]  = tf.summary.scalar(tag, summary_placeholders[tag])
+
+    # histogram_summary_tags = ['episode.rewards', 'episode.actions']
+
+    # for tag in histogram_summary_tags:
+    #     summary_placeholders[tag] = tf.placeholder('float32', None, name=tag.replace(' ', '_'))
+    #     summary_ops[tag]  = tf.summary.histogram(tag, summary_placeholders[tag])
 
 init = tf.global_variables_initializer()
 saver = tf.train.Saver()
@@ -200,6 +218,16 @@ def preprocess_observation(obs):
     return imresize(rgb2gray(obs)/255., (input_width, input_height))
 
 with tf.Session() as sess:
+    summary_writer = tf.summary.FileWriter(os.path.join(args.path, "logs"), sess.graph)
+
+    def inject_summary(tag_dict, step):
+        summary_str_lists = sess.run(
+            [summary_ops[tag] for tag in tag_dict.keys()],
+            {summary_placeholders[tag]: value for tag, value in tag_dict.items()}
+        )
+        for summary_str in summary_str_lists:
+            summary_writer.add_summary(summary_str, step)
+
     # Resume the training (if possible)
     ckpt = tf.train.get_checkpoint_state(args.path)
     if ckpt and ckpt.model_checkpoint_path:
@@ -213,22 +241,24 @@ with tf.Session() as sess:
         print(" [!] Load FAILED: %s" % args.path)
 
     # Training
+    exp_moving_avg_reward = 0.0
+    current_rewards = []
     while True:
         step = global_step.eval()
         if step >= args.number_steps:
             break
         iteration += 1
         if args.verbosity > 0:
-            print("Iter {}, training step {}/{} ({:.1f})%, "
+            print("\rIter {}, training step {}/{} ({:.1f})%, "
                   "loss {:5f}, exp-moving-avg reward {:5f}, "
-                  "mean max-Q {:5f}\r".format(
+                  "mean max-Q {:5f}".format(
                     iteration, step, args.number_steps, step * 100 / args.number_steps,
                     loss_val, exp_moving_avg_reward, 
                     mean_max_q), 
                 end=""
             )
 
-         # Game over, start again
+        # Game over, start again
         if done:
             obs = env.reset()
 
@@ -260,6 +290,7 @@ with tf.Session() as sess:
         # Let's memorize what happened
         replay_memory.add(next_state, reward, action, done)
         state = next_state
+        current_rewards.append(reward)
 
         if args.test:
             continue
@@ -274,7 +305,7 @@ with tf.Session() as sess:
 
         if iteration < training_start or iteration % args.learn_iterations != 0:
             continue # only train after warmup period and at regular intervals
-        
+
         # Sample memories and use the target DQN to produce the target Q-Value
         X_state_val, X_action_val, rewards, X_next_state_val, terminal = \
              replay_memory.sample()
@@ -286,10 +317,11 @@ with tf.Session() as sess:
 
         # Update exponential moving average of rewards
         if first_train_step:
-            exp_moving_avg_reward = np.mean(rewards)
+            exp_moving_avg_reward = np.mean(current_rewards)
             first_train_step = False
         else:
-            exp_moving_avg_reward = (exp_moving_avg_reward * 0.99) + (0.01 * np.mean(rewards))
+            exp_moving_avg_reward = (exp_moving_avg_reward * 0.99) + (0.01 * np.mean(current_rewards))
+        current_rewards = []
 
         # Train the online DQN
         _, loss_val = sess.run([training_op, loss], feed_dict={
@@ -298,6 +330,15 @@ with tf.Session() as sess:
             y: y_val,
             learning_rate_step: step,
         })
+
+        # Regularly inject summary
+        if step % summary_steps == 0:
+            inject_summary(
+                {
+                    'average.reward': exp_moving_avg_reward
+                }, 
+                step
+            )
 
         # Regularly copy the online DQN to the target DQN
         if step % args.copy_steps == 0:
